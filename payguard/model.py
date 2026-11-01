@@ -66,18 +66,62 @@ def load():
     return model, meta
 
 
-def explain(txn: dict, meta: dict) -> list:
-    """Top contributing factors: deviation from the safe baseline, weighted
-    by the model's global feature importance. Returns readable factor dicts."""
+def explain(txn: dict, meta: dict, model=None) -> list:
+    """Top contributing factors, grounded in the model itself (perturbation
+    explanation): for each feature, replace its value with the safe-seller
+    baseline median and measure how far the model's risk score falls. The
+    drop is that feature's contribution to this transaction's risk. Only
+    features whose removal actually lowers the score are listed, so a factor
+    is never blamed unless the model itself reacts to it. Returns readable
+    factor dicts with their measured contribution.
+
+    Falls back to the deviation-weighted heuristic (deviation from the safe
+    baseline × global feature importance) only when perturbation finds no
+    single feature with a measurable effect — e.g. when risk is spread so
+    evenly that no one ablation moves the score — so a risky transaction is
+    never left unexplained.
+    """
+    if model is None:
+        model, meta = load()
+    feats = transaction_to_features(txn)
+    baseline = meta["baseline_median"]
+    base_score = float(model.predict_proba(np.array([feats]))[0, 1])
+    scored = []
+    for i, name in enumerate(FEATURES):
+        # hour_of_day is circular (23:00 is adjacent to 00:00) and a weak
+        # signal (importance ~0.01); surfacing it as a "risk factor" for
+        # otherwise safe payments reads as a false alarm, so it is excluded
+        # from explanations entirely.
+        if name == "hour_of_day":
+            continue
+        ablated = list(feats)
+        ablated[i] = baseline[name]
+        ablated_score = float(model.predict_proba(np.array([ablated]))[0, 1])
+        contribution = base_score - ablated_score
+        if contribution > 0.001:
+            scored.append((contribution, name))
+    if not scored:
+        return _deviation_explain(txn, meta)
+    scored.sort(reverse=True)
+    return [
+        {
+            "factor": FACTOR_TEXT[name][0],
+            "detail": FACTOR_TEXT[name][1],
+            "contribution": round(contribution, 4),
+        }
+        for contribution, name in scored[:3]
+    ]
+
+
+def _deviation_explain(txn: dict, meta: dict) -> list:
+    """Fallback explanation: deviation from the safe baseline, weighted by
+    the model's global feature importance. Used only when perturbation finds
+    no single feature with a measurable effect."""
     feats = transaction_to_features(txn)
     baseline = meta["baseline_median"]
     importance = meta["importance"]
     scored = []
     for name, value in zip(FEATURES, feats):
-        # hour_of_day is circular (23:00 is adjacent to 00:00) and a weak
-        # signal (importance ~0.01); surfacing it as a "risk factor" for
-        # otherwise safe payments reads as a false alarm, so it is excluded
-        # from explanations entirely.
         if name == "hour_of_day":
             continue
         base = baseline[name]
@@ -125,7 +169,7 @@ def score_transaction(txn: dict) -> dict:
     # transaction the model scores near zero may deviate on a minor feature,
     # but listing "risk factors" next to a 0% score would be a false alarm —
     # so below MEDIUM the explanation is empty and the summary says so.
-    factors = explain(txn, meta) if score >= 0.4 else []
+    factors = explain(txn, meta, model) if score >= 0.4 else []
     return {
         "id": txn.get("id", "TXN-?"),
         "amount": float(txn.get("amount", 0)),

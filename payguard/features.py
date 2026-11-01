@@ -4,10 +4,11 @@ Pipeline: transaction -> numeric features -> XGBoost risk model ->
 per-transaction explanation (top contributing factors) -> plain-language summary.
 
 The explanation method is deliberately transparent and honest: for each
-transaction we compare its feature values against the "safe seller baseline"
-(medians of low-risk training transactions) and weight each deviation by the
-model's global feature importance. The result is a ranked list of the factors
-that pushed this transaction toward risk, in plain language. No black box.
+transaction we perturb it — replacing one feature at a time with the "safe
+seller baseline" (medians of low-risk training transactions) — and measure
+how far the model's own risk score falls. The drop is that feature's
+measured contribution, so a factor is only blamed when the model itself
+reacts to it. No black box, no invented attributions.
 """
 
 FEATURES = [
