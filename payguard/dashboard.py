@@ -19,24 +19,45 @@ if st.button("Refresh risk queue"):
 results = [score_transaction(t) for t in sample_transactions()]
 results.sort(key=lambda r: r["risk_score"], reverse=True)
 
+# Decided state, from the API log when it is reachable: a payment you
+# already decided on shows its decision in the queue instead of looking
+# undecided, and re-deciding it updates the same entry (see decisions.py).
+decided = {}
+try:
+    import httpx
+
+    decided = {
+        d["txn_id"]: d["decision"]
+        for d in httpx.get(f"{api_base}/decisions", timeout=5.0).json()[
+            "decisions"
+        ]
+    }
+except Exception:
+    decided = {}
+
 high = sum(1 for r in results if r["risk_band"] == "HIGH")
 medium = sum(1 for r in results if r["risk_band"] == "MEDIUM")
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Payments in queue", len(results))
 c2.metric("High risk — hold", high)
 c3.metric("Medium risk — review", medium)
+c4.metric("Decided", sum(1 for r in results if r["id"] in decided))
 
 for r in results:
     emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}[r["risk_band"]]
+    badge = f" ✓ {decided[r['id']]}" if r["id"] in decided else ""
     with st.expander(
         f"{emoji} {r['id']} — ${r['amount']:.2f} — {r['risk_band']} "
-        f"({r['risk_score']:.0%}) — {r['action']}"
+        f"({r['risk_score']:.0%}) — {r['action']}{badge}"
     ):
         st.write(r["summary"])
         if r["factors"]:
             st.write("**Top risk factors:**")
             for f in r["factors"]:
                 st.write(f"- {f['factor']}: {f['detail']}")
+        if r["id"] in decided:
+            st.write(f"**Current decision: {decided[r['id']]}** — "
+                     "pick again below to change it.")
         st.write("**Your decision:**")
         b1, b2, b3 = st.columns(3)
         for col, choice in ((b1, "HOLD"), (b2, "REVIEW"), (b3, "APPROVE")):
@@ -68,9 +89,9 @@ for r in results:
 st.divider()
 st.subheader("Decision log")
 st.write(
-    "Decisions you recorded this session (held payments stay held until "
-    "you change them). The log lives in the API's memory and resets when "
-    "the API restarts."
+    "Decisions you recorded (held payments stay held until you change "
+    "them). The log is saved to disk on the API machine, so it survives "
+    "an API restart."
 )
 if st.button("Refresh decision log"):
     st.rerun()
@@ -97,6 +118,14 @@ try:
                 for d in log["decisions"]
             ]
         )
+        try:
+            csv_text = httpx.get(
+                f"{api_base}/decisions/export", timeout=5.0).text
+            st.download_button(
+                "Download decision log (CSV)", csv_text,
+                "payguard_decisions.csv", "text/csv")
+        except Exception:
+            pass
 except Exception:
     st.write("Decision log unavailable — start the API with uvicorn first.")
 
@@ -133,6 +162,39 @@ if uploaded is not None:
         for r in scored:
             if r["risk_band"] != "LOW":
                 st.write(f"**{r['id']}** — {r['summary']}")
+            # Uploaded payments are the seller's real payments, so they get
+            # the same decision buttons as the demo queue — otherwise the
+            # upload is a report, not a workflow, and nothing the seller
+            # uploads ever reaches the decision log.
+            if r["id"] in decided:
+                st.write(f"**Current decision: {decided[r['id']]}** — "
+                         "pick again below to change it.")
+            ub1, ub2, ub3 = st.columns(3)
+            for col, choice in ((ub1, "HOLD"), (ub2, "REVIEW"), (ub3, "APPROVE")):
+                if col.button(choice, key=f"csv-{choice}-{r['id']}"):
+                    try:
+                        import httpx
+
+                        resp = httpx.post(
+                            f"{api_base}/decisions",
+                            json={
+                                "txn_id": r["id"],
+                                "decision": choice,
+                                "risk_band": r["risk_band"],
+                                "risk_score": r["risk_score"],
+                                "amount": r["amount"],
+                            },
+                            timeout=5.0,
+                        )
+                        if resp.status_code == 201:
+                            st.success(f"Recorded {choice} for {r['id']}.")
+                        else:
+                            st.error(f"Could not record decision: {resp.text}")
+                    except Exception as e:
+                        st.warning(
+                            f"API not reachable at {api_base} — start it with "
+                            f"uvicorn first, then retry: {e}"
+                        )
     except ValueError as e:
         st.error(f"Could not read that CSV: {e}")
 
