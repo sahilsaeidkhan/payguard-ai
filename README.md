@@ -8,6 +8,22 @@ not a black-box score. PayGuard scores every payment with an XGBoost model,
 explains the top risk factors per transaction, and recommends HOLD / REVIEW /
 APPROVE in a risk-ranked seller queue.
 
+## Why this matters (the cost of shipping first, asking later)
+
+A chargeback costs a seller far more than the disputed sale. Mastercard
+(with Javelin, 2026) puts third-party fees plus internal handling alone at
+an average of **$128 per chargeback — before the lost sale and the shipped
+goods are counted** — and LexisNexis (2026) puts the total fraud cost at
+**$3.75 for every $1 of direct loss** in US retail/ecommerce. A seller who
+ships a risky order and loses the dispute loses the goods, the revenue,
+and the fee, and risks processor monitoring if disputes pile up. PayGuard
+moves the decision to *before* shipping, when prevention is still free.
+
+Sources: Mastercard/Javelin figures via
+<https://www.chargeflow.io/blog/what-is-the-true-cost-of-chargebacks-to-your-business>;
+LexisNexis figure via
+<https://www.chargebackstop.com/blog/chargeback-statistics>.
+
 ## How it works
 
 1. **Transactions in** — three ways: a demo queue of seller transactions, a
@@ -61,7 +77,8 @@ streamlit run payguard/dashboard.py
 - `POST /upload-csv` — score every row of an uploaded transaction CSV, riskiest first
 - `GET /sample-csv` — an example CSV in the accepted format
 - `POST /decisions` — record a seller decision (HOLD / REVIEW / APPROVE) on a payment
-- `GET /decisions` — decision log + counts by decision
+- `GET /decisions` — decision log + counts by decision (persisted to `decisions.json`, survives API restarts)
+- `GET /decisions/export` — decision log as a CSV download (the seller's action list)
 - `GET /paypal/status` — sandbox wiring status (never exposes credentials)
 - `POST /paypal/order` — create a live PayPal sandbox order and score it
   (returns the order id, status, buyer-approval URL, and the risk score)
@@ -109,8 +126,40 @@ curl -X POST http://127.0.0.1:8000/score \
   3-letter currency codes) and a 1–100 bound on `/transactions?n`, so
   bad payloads return a clear 422 instead of a nonsense score; 45/45
   tests pass, live API + dashboard re-verified. Tagged `saved-v7`.
-- Next: public-repo sync to saved-v7, PayPal sandbox app credentials
-  (live demo loop), demo video, submission writeup.
+- **v8 (Nov 2, 2026):** quantified impact case — the README now states
+  the cost of a chargeback with attributed industry figures ($128
+  fees/handling per chargeback before the lost sale, Mastercard/Javelin
+  2026; $3.75 total cost per $1 of fraud loss, LexisNexis 2026) instead
+  of an unquantified claim; demo-video script drafted for the Nov 9–10
+  recording slot. Tagged `saved-v8`.
+- **v9 (Nov 3, 2026):** the decision loop closes — re-deciding a payment
+  supersedes the earlier decision instead of double-counting it, and the
+  dashboard queue now shows each decided payment's current decision
+  (✓ HOLD / REVIEW / APPROVE) plus a "Decided" count, so a decided
+  payment never looks undecided. 47/47 tests pass, live API + dashboard
+  re-verified. Tagged `saved-v9`.
+- **v10 (Nov 4, 2026):** uploaded payments are actionable — the dashboard's
+  CSV-upload results now carry the same HOLD / REVIEW / APPROVE buttons
+  as the demo queue (with the current decision shown when one exists), so
+  a seller's real uploaded payments reach the decision log instead of
+  ending as a read-only table. 47/47 tests pass, live API + dashboard
+  re-verified. Tagged `saved-v10`.
+- **v11 (Nov 5, 2026):** the decision log persists — decisions are saved
+  to `decisions.json` and survive an API restart (before, a restart wiped
+  every HOLD), and `GET /decisions/export` downloads the log as CSV, so
+  the queue → explanation → action → record loop is a complete seller
+  workflow instead of a session-only demo. Tagged `saved-v11`.
+- **v12 (Nov 5, 2026):** the live PayPal sandbox loop is verified end to
+  end — a real sandbox order was created via the Orders API and scored
+  (`POST /paypal/order` returned 200 with order id `3S06808W3386635N`),
+  `/paypal/status` reports `configured: true`, and the transport handles
+  the sandbox egress (explicit proxy + system CA bundle). 50/50 tests
+  pass. Tagged `saved-v12`.
+- Next: demo video recorded Nov 5 (99.8 s, 1080p, real dashboard
+  recording of the queue, scoring, CSV upload, decision log, and the
+  live sandbox order loop); remaining is the public YouTube upload and
+  the Devpost submission writeup finalization (Nov 9–10), submit by
+  Nov 11.
 
 ## PayPal sandbox setup (free, no KYC)
 
@@ -128,12 +177,17 @@ curl -X POST http://127.0.0.1:8000/score \
 - **Technological Implementation:** real XGBoost model + FastAPI + Streamlit,
   not a mockup; real PayPal Orders API calls are the product's input.
 - **Design:** a complete seller workflow (queue → explanation → action →
-  recorded decision log).
+  recorded decision log), and uploaded CSV payments are actionable the
+  same way — not a read-only report.
 - **Potential Impact:** chargebacks and fraud are a real, quantified cost for
-  small sellers; the tool acts before shipping, when prevention is possible.
+  small sellers ($128 in fees/handling per chargeback before the lost sale,
+  Mastercard/Javelin 2026; $3.75 total cost per $1 of fraud loss, LexisNexis
+  2026); the tool acts before shipping, when prevention is possible.
 - **Innovation:** explainable risk + plain-language agent summary, not just a
   score.
-- **Presentation:** end-to-end demo (queue, single-payment scoring, API docs).
+- **Presentation:** end-to-end demo (queue, single-payment scoring, CSV
+  upload, decision log, live sandbox order loop), recorded as a 99.8 s
+  video showing the real dashboard working — no mockups.
 
 Submission checklist (full plan lives outside this repo): public repo with
 LICENSE, Devpost writeup mapped to the 5 judging criteria, functional demo
