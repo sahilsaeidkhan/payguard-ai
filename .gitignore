@@ -3,4 +3,6 @@ __pycache__/
 *.pyc
 model.joblib
 model_meta.json
+decisions.json
 .streamlit/
+.env
