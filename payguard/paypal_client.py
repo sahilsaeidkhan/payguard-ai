@@ -66,12 +66,28 @@ class PayPalClient:
         self._token = None
 
     def _client(self):
-        # trust_env=False: the host VM's proxy env vars are not valid for
-        # this client and httpx parses them at construction time, which
-        # used to crash client creation before any request was made.
-        return self._http or httpx.Client(
-            base_url=base_url(), timeout=30.0, trust_env=False
+        if self._http:
+            return self._http
+        # Build the transport explicitly instead of trust_env=True:
+        # httpx crashes parsing this host's NO_PROXY (bracketed IPv6
+        # entries) at construction time. But a proxy may still be
+        # required for egress, so pass HTTPS_PROXY through directly,
+        # and honour SSL_CERT_FILE when the proxy TLS-intercepts with
+        # a locally installed CA (system bundle instead of certifi).
+        kwargs = {"base_url": base_url(), "timeout": 30.0, "trust_env": False}
+        proxy = (
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("http_proxy")
         )
+        if proxy:
+            kwargs["proxy"] = proxy
+        if os.environ.get("SSL_CERT_FILE"):
+            kwargs["verify"] = os.environ["SSL_CERT_FILE"]
+        elif os.path.exists("/etc/ssl/certs/ca-certificates.crt"):
+            kwargs["verify"] = "/etc/ssl/certs/ca-certificates.crt"
+        return httpx.Client(**kwargs)
 
     def get_access_token(self) -> str:
         if self._token:
