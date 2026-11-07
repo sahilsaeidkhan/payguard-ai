@@ -1,12 +1,13 @@
 """FastAPI backend for PayGuard AI."""
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from payguard.data import sample_transactions
 from payguard.decisions import (
     decision_summary,
+    decisions_csv,
     list_decisions,
     record_decision,
 )
@@ -154,6 +155,18 @@ def post_decision(d: DecisionIn):
 def get_decisions():
     """Decision log, most recent first, plus counts by decision."""
     return {"summary": decision_summary(), "decisions": list_decisions()}
+
+
+@app.get("/decisions/export")
+def export_decisions():
+    """Decision log as a CSV download — the seller's action list for
+    held/reviewed payments outside the dashboard."""
+    return Response(
+        content=decisions_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition":
+                 'attachment; filename="payguard_decisions.csv"'},
+    )
 
 
 @app.get("/sample-csv", response_class=PlainTextResponse)
